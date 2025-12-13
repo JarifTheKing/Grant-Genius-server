@@ -1,6 +1,8 @@
 require("dotenv").config();
 const express = require("express");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 const cors = require("cors");
 
 const app = express();
@@ -43,6 +45,9 @@ async function run() {
 
     // Scholarships collection
     const scholarshipsCollection = db.collection("all-scholarship");
+
+    // Payments collection
+    const paymentsCollection = db.collection("payments");
 
     // My-Applications collection
     const myApplicationsCollection = db.collection("my-applications");
@@ -252,6 +257,105 @@ async function run() {
       });
 
       res.json(result);
+    });
+
+    // -------------------------------------
+    //        PAYMENT HISTORY API
+    // -------------------------------------
+    app.get("/payment-history", async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        if (!email) {
+          return res.status(400).send({ error: "Email is required" });
+        }
+
+        const payments = await myApplicationsCollection
+          .find({
+            userEmail: email,
+            paymentStatus: "paid",
+          })
+          .sort({ applicationDate: -1 })
+          .toArray();
+
+        res.send(payments);
+      } catch (error) {
+        console.error("PAYMENT HISTORY SERVER ERROR:", error);
+        res.status(500).send({ error: "Failed to load payment history" });
+      }
+    });
+
+    // MARK PAYMENT AS PAID
+    app.patch("/payment-success/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        const result = await myApplicationsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              paymentStatus: "paid",
+              applicationStatus: "processing",
+              paymentDate: new Date(),
+            },
+          }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ error: "Application not found" });
+        }
+
+        res.send({ success: true });
+      } catch (error) {
+        console.error("PAYMENT SUCCESS ERROR:", error);
+        res.status(500).send({ error: "Failed to update payment status" });
+      }
+    });
+
+    // Payment --- API's
+    app.post("/create-checkout-session", async (req, res) => {
+      const { applicationId } = req.body;
+
+      const application = await myApplicationsCollection.findOne({
+        _id: new ObjectId(applicationId),
+      });
+
+      if (!application) {
+        return res.status(404).send({ error: "Application not found" });
+      }
+
+      if (application.paymentStatus === "paid") {
+        return res.send({ message: "Already paid" });
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        mode: "payment",
+        customer_email: application.userEmail,
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: application.scholarshipName,
+                description: application.universityName,
+              },
+              unit_amount: application.applicationFees * 100,
+            },
+            quantity: 1,
+          },
+        ],
+
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success/${applicationId}`,
+
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel/${applicationId}`,
+
+        metadata: {
+          applicationId: applicationId,
+        },
+      });
+
+      res.send({ url: session.url });
     });
 
     // Ping test
