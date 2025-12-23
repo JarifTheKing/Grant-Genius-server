@@ -19,13 +19,16 @@ admin.initializeApp({
 });
 
 /* ================= MIDDLEWARE ================= */
-app.use(express.json());
+const allowedOrigins = ["http://localhost:5173", "https://myfrontend.com"];
+
 app.use(
   cors({
-    origin: ["http://localhost:5173"],
+    origin: ["http://localhost:5173", "https://grant-genius.netlify.app"],
     credentials: true,
   })
 );
+
+app.use(express.json());
 
 /* ================= FIREBASE TOKEN VERIFY ================= */
 const verifyFBToken = async (req, res, next) => {
@@ -129,31 +132,38 @@ async function run() {
       verifyFBToken,
       verifyAdmin,
       async (req, res) => {
-        const result = await myApplicationsCollection
-          .aggregate([
-            {
-              $match: {
-                category: { $exists: true, $ne: "Unknown" },
+        try {
+          const result = await myApplicationsCollection
+            .aggregate([
+              {
+                $project: {
+                  category: {
+                    $ifNull: ["$category", "General"],
+                  },
+                },
               },
-            },
-            {
-              $group: {
-                _id: "$category",
-                count: { $sum: 1 },
+              {
+                $group: {
+                  _id: "$category",
+                  count: { $sum: 1 },
+                },
               },
-            },
-            {
-              $project: {
-                _id: 0,
-                category: "$_id",
-                count: 1,
+              {
+                $project: {
+                  _id: 0,
+                  category: "$_id",
+                  count: 1,
+                },
               },
-            },
-            { $sort: { count: -1 } },
-          ])
-          .toArray();
+              { $sort: { count: -1 } },
+            ])
+            .toArray();
 
-        res.send(result);
+          res.send(result);
+        } catch (err) {
+          console.error("CATEGORY ANALYTICS ERROR:", err);
+          res.status(500).send([]);
+        }
       }
     );
 
@@ -333,18 +343,6 @@ async function run() {
     );
 
     /* ================= MODERATORS ================= */
-    // app.post("/moderators", async (req, res) => {
-    //   try {
-    //     const moderator = req.body;
-    //     const result = await moderatorsCollection.insertOne({
-    //       ...moderator,
-    //       createdAt: new Date(),
-    //     });
-    //     res.status(201).send(result);
-    //   } catch (err) {
-    //     res.status(500).send({ error: "Failed to create moderator" });
-    //   }
-    // });
 
     app.post("/moderators", async (req, res) => {
       try {
@@ -371,15 +369,6 @@ async function run() {
         res.status(500).send({ error: "Failed to create moderator" });
       }
     });
-
-    // app.get("/moderators", async (req, res) => {
-    //   try {
-    //     const result = await moderatorsCollection.find().toArray();
-    //     res.send(result);
-    //   } catch (err) {
-    //     res.status(500).send({ error: "Failed to fetch moderators" });
-    //   }
-    // });
 
     app.get("/moderators/status/:status", async (req, res) => {
       try {
@@ -410,53 +399,6 @@ async function run() {
       }
     });
 
-    // app.patch("/moderators/:id", async (req, res) => {
-    //   try {
-    //     const { id } = req.params;
-    //     const updatedData = req.body;
-
-    //     const result = await moderatorsCollection.updateOne(
-    //       { _id: new ObjectId(id) },
-    //       {
-    //         $set: {
-    //           ...updatedData,
-    //           updatedAt: new Date(),
-    //         },
-    //       }
-    //     );
-
-    //     if (result.matchedCount === 0) {
-    //       return res.status(404).send({ error: "Moderator not found" });
-    //     }
-
-    //     res.send(result);
-    //   } catch (err) {
-    //     res.status(500).send({ error: "Failed to update moderator" });
-    //   }
-    // });
-    // app.patch("/moderators/approve/:id", async (req, res) => {
-    //   try {
-    //     const { id } = req.params;
-
-    //     const result = await moderatorsCollection.updateOne(
-    //       { _id: new ObjectId(id) },
-    //       {
-    //         $set: {
-    //           status: "approved",
-    //           approvedAt: new Date(),
-    //         },
-    //       }
-    //     );
-
-    //     if (result.matchedCount === 0) {
-    //       return res.status(404).send({ error: "Moderator not found" });
-    //     }
-
-    //     res.send({ message: "Moderator approved" });
-    //   } catch (err) {
-    //     res.status(500).send({ error: "Failed to approve moderator" });
-    //   }
-    // });
     app.patch("/moderators/approve/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -566,22 +508,14 @@ async function run() {
       );
     });
 
-    // app.post("/my-applications", async (req, res) => {
-    //   const application = {
-    //     ...req.body,
-    //     applicationStatus: "pending",
-    //     paymentStatus: req.body.applicationFees > 0 ? "unpaid" : "paid",
-    //     applicationDate: new Date(),
-    //   };
-
-    //   res.send(await myApplicationsCollection.insertOne(application));
-    // });
-
-    app.post("/my-applications", async (req, res) => {
+    app.post("/my-applications", verifyFBToken, async (req, res) => {
       const application = {
         ...req.body,
 
-        // ✅ ONE consistent field
+        userName: req.decoded.name || "N/A",
+        // userEmail: req.decoded.email,
+        // userName: req.body.userName || req.body.displayName || "N/A",
+        userEmail: req.decoded.email,
         category: req.body.category || req.body.subjectCategory || "Unknown",
 
         applicationStatus: "pending",
@@ -593,9 +527,46 @@ async function run() {
       res.send(result);
     });
 
+    /* ================= DELETE MY APPLICATION ================= */
+    app.delete("/my-applications/:id", verifyFBToken, async (req, res) => {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid application ID" });
+      }
+
+      // 1️⃣ Find application
+      const application = await myApplicationsCollection.findOne({
+        _id: new ObjectId(id),
+      });
+
+      if (!application) {
+        return res.status(404).send({ message: "Application not found" });
+      }
+
+      // 2️⃣ Security check (only owner can delete)
+      if (application.userEmail !== req.decoded.email) {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
+
+      // 3️⃣ Only pending applications can be deleted
+      if (application.applicationStatus !== "pending") {
+        return res.status(400).send({
+          message: "Only pending applications can be deleted",
+        });
+      }
+
+      // 4️⃣ Delete
+      const result = await myApplicationsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+
+      res.send({ success: true, deletedCount: result.deletedCount });
+    });
+
     /* ================= applications-details ================= */
 
-    // 🔐 MODERATOR / ADMIN – GET ALL APPLICATIONS
+    //  MODERATOR / ADMIN – GET ALL APPLICATIONS
     app.get(
       "/applications",
       verifyFBToken,
@@ -641,151 +612,121 @@ async function run() {
       }
     );
 
-    app.patch("/applications/:id", verifyFBToken, async (req, res) => {
-      const { id } = req.params;
+    app.patch("/my-applications/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const { category, universityAddress } = req.body;
 
-      const update = {
-        $set: {
-          applicationStatus: req.body.applicationStatus,
-          feedback: req.body.feedback,
-        },
-      };
+      const application = await myApplicationsCollection.findOne({
+        _id: new ObjectId(id),
+      });
+
+      // 🔒 ownership check
+      if (!application) {
+        return res.status(404).send({ message: "Application not found" });
+      }
+
+      if (application.userEmail !== req.decoded.email) {
+        return res.status(403).send({ message: "Forbidden" });
+      }
 
       const result = await myApplicationsCollection.updateOne(
         { _id: new ObjectId(id) },
-        update
+        {
+          $set: {
+            category,
+            universityAddress,
+            updatedAt: new Date(),
+          },
+        }
       );
 
-      res.send(result);
+      res.send({ success: true, result });
     });
+
+    // MODERATOR / ADMIN – UPDATE APPLICATION STATUS
     app.patch(
       "/applications/:id",
       verifyFBToken,
       verifyModerator,
       async (req, res) => {
-        const { applicationStatus, feedback } = req.body;
+        const { id } = req.params;
+        const { applicationStatus } = req.body;
+
+        if (!applicationStatus) {
+          return res.status(400).send({ message: "Status is required" });
+        }
 
         const result = await myApplicationsCollection.updateOne(
-          { _id: new ObjectId(req.params.id) },
+          { _id: new ObjectId(id) },
           {
             $set: {
               applicationStatus,
-              feedback,
-              reviewedAt: new Date(),
+              updatedAt: new Date(),
             },
           }
         );
 
-        res.send(result);
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Application not found" });
+        }
+
+        res.send({ success: true });
       }
     );
 
     /* ================= REVIEWS ================= */
-    app.get("/reviews/public", async (req, res) => {
-      const { scholarshipId } = req.query;
+
+    app.get("/reviews", verifyFBToken, verifyModerator, async (req, res) => {
       const reviews = await reviewsCollection
-        .find({ scholarshipId })
-        .sort({ reviewDate: -1 })
+        .find({})
+        .sort({ createdAt: -1 })
         .toArray();
+
       res.send(reviews);
     });
 
-    // app.post("/reviews", verifyFBToken, async (req, res) => {
-    //   try {
-    //     const {
-    //       applicationId,
-    //       scholarshipId,
-    //       userEmail,
-    //       ratingPoint,
-    //       reviewComment,
-    //     } = req.body;
+    // STUDENT – GET OWN REVIEWS
+    app.get("/reviews/my", verifyFBToken, async (req, res) => {
+      const userEmail = req.decoded.email;
 
-    //     // 🔒 Email security
-    //     if (userEmail !== req.decoded.email) {
-    //       return res.status(403).send({ message: "Forbidden" });
-    //     }
+      const reviews = await reviewsCollection
+        .find({ userEmail })
+        .sort({ createdAt: -1 })
+        .toArray();
 
-    //     // 🔍 Find application
-    //     const application = await applicationsCollection.findOne({
-    //       _id: new ObjectId(applicationId),
-    //       userEmail,
-    //     });
+      res.send(reviews);
+    });
 
-    //     if (!application) {
-    //       return res.status(404).send({ message: "Application not found" });
-    //     }
-
-    //     // ❌ Review permission check
-    //     if (
-    //       application.applicationStatus !== "approved" ||
-    //       (application.applicationFees > 0 &&
-    //         application.paymentStatus !== "paid")
-    //     ) {
-    //       return res.status(403).send({ message: "Not allowed to review" });
-    //     }
-
-    //     // 🚫 Prevent duplicate review
-    //     const alreadyReviewed = await reviewsCollection.findOne({
-    //       applicationId,
-    //       userEmail,
-    //     });
-
-    //     if (alreadyReviewed) {
-    //       return res.status(409).send({ message: "Review already submitted" });
-    //     }
-
-    //     // ✅ Create review object
-    //     const reviewDoc = {
-    //       applicationId,
-    //       scholarshipId,
-    //       userEmail,
-    //       userName: application.userName,
-    //       userImage: application.userImage,
-    //       universityName: application.universityName,
-    //       ratingPoint,
-    //       reviewComment,
-    //       reviewDate: new Date(),
-    //     };
-
-    //     const result = await reviewsCollection.insertOne(reviewDoc);
-
-    //     res.send(result);
-    //   } catch (error) {
-    //     console.error("REVIEW ERROR:", error);
-    //     res.status(500).send({ message: "Failed to add review" });
-    //   }
-    // });
     app.post("/reviews", verifyFBToken, async (req, res) => {
       try {
-        const {
-          applicationId,
-          scholarshipId,
-          userEmail,
-          ratingPoint,
-          reviewComment,
-        } = req.body;
+        const { applicationId, scholarshipId, rating, comment } = req.body;
+        const userEmail = req.decoded.email;
 
-        if (userEmail !== req.decoded.email) {
-          return res.status(403).send({ message: "Forbidden" });
+        // 🛑 HARD VALIDATION
+        if (!applicationId || !ObjectId.isValid(applicationId)) {
+          return res.status(400).send({ message: "Invalid application ID" });
         }
 
+        if (!rating || !comment) {
+          return res
+            .status(400)
+            .send({ message: "Rating and comment required" });
+        }
+
+        // ✅ STATUS CHECK
         const application = await myApplicationsCollection.findOne({
           _id: new ObjectId(applicationId),
           userEmail,
+          applicationStatus: "approved",
         });
 
         if (!application) {
-          return res.status(404).send({ message: "Application not found" });
+          return res
+            .status(403)
+            .send({ message: "Not allowed to review this application" });
         }
 
-        if (
-          application.applicationStatus !== "approved" ||
-          (application.applicationFees > 0 &&
-            application.paymentStatus !== "paid")
-        ) {
-          return res.status(403).send({ message: "Not allowed to review" });
-        }
-
+        // 🚫 DUPLICATE REVIEW CHECK
         const alreadyReviewed = await reviewsCollection.findOne({
           applicationId,
           userEmail,
@@ -795,23 +736,29 @@ async function run() {
           return res.status(409).send({ message: "Review already submitted" });
         }
 
-        const reviewDoc = {
+        const review = {
           applicationId,
           scholarshipId,
-          userEmail,
-          userName: application.userName,
-          userImage: application.userImage,
+          scholarshipName: application.scholarshipName,
           universityName: application.universityName,
-          ratingPoint,
-          reviewComment,
-          reviewDate: new Date(),
+          userEmail,
+          rating,
+          comment,
+          createdAt: new Date(),
         };
 
-        const result = await reviewsCollection.insertOne(reviewDoc);
+        const result = await reviewsCollection.insertOne(review);
+
+        // ✅ OPTIONAL: mark application reviewed
+        await myApplicationsCollection.updateOne(
+          { _id: new ObjectId(applicationId) },
+          { $set: { reviewed: true } }
+        );
+
         res.send(result);
       } catch (error) {
-        console.error("REVIEW ERROR:", error);
-        res.status(500).send({ message: "Failed to add review" });
+        console.error("❌ REVIEW API ERROR:", error);
+        res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
@@ -831,138 +778,7 @@ async function run() {
     );
 
     /* ================= PAYMENT SUCCESS ================= */
-    // app.patch("/payment-success/:id", verifyFBToken, async (req, res) => {
 
-    //   const { id } = req.params;
-
-    //   if (!ObjectId.isValid(id)) {
-    //     return res.status(400).send({ message: "Invalid application ID" });
-    //   }
-
-    //   // 1️⃣ Find application
-    //   const application = await myApplicationsCollection.findOne({
-    //     _id: new ObjectId(id),
-    //   });
-
-    //   if (!application) {
-    //     return res.status(404).send({ message: "Application not found" });
-    //   }
-
-    //   // 2️⃣ Security check
-    //   if (application.userEmail !== req.decoded.email) {
-    //     return res.status(403).send({ message: "Forbidden access" });
-    //   }
-
-    //   // 3️⃣ Update application payment status
-    //   await myApplicationsCollection.updateOne(
-    //     { _id: new ObjectId(id) },
-    //     { $set: { paymentStatus: "paid" } }
-    //   );
-
-    //   // 4️⃣ Save payment history
-    //   await paymentsCollection.insertOne({
-    //     applicationId: id,
-    //     userEmail: application.userEmail,
-    //     scholarshipName: application.scholarshipName,
-    //     amount: application.applicationFees,
-    //     paymentDate: new Date(),
-    //     status: "success",
-    //   });
-
-    //   res.send({ success: true });
-    // });
-    // app.patch("/payment-success/:id", verifyFBToken, async (req, res) => {
-    //   const { id } = req.params;
-
-    //   if (!ObjectId.isValid(id)) {
-    //     return res.status(400).send({ message: "Invalid application ID" });
-    //   }
-
-    //   const application = await myApplicationsCollection.findOne({
-    //     _id: new ObjectId(id),
-    //   });
-
-    //   if (!application) {
-    //     return res.status(404).send({ message: "Application not found" });
-    //   }
-
-    //   if (application.userEmail !== req.decoded.email) {
-    //     return res.status(403).send({ message: "Forbidden access" });
-    //   }
-
-    //   // 🔒 STOP if already paid
-    //   if (application.paymentStatus === "paid") {
-    //     return res.send({ success: true, message: "Already processed" });
-    //   }
-
-    //   // 1️⃣ Mark application as paid
-    //   await myApplicationsCollection.updateOne(
-    //     { _id: new ObjectId(id) },
-    //     { $set: { paymentStatus: "paid" } }
-    //   );
-
-    //   // 2️⃣ Check if payment already exists
-    //   const existingPayment = await paymentsCollection.findOne({
-    //     applicationId: id,
-    //   });
-
-    //   if (!existingPayment) {
-    //     await paymentsCollection.insertOne({
-    //       applicationId: id,
-    //       userEmail: application.userEmail,
-    //       scholarshipName: application.scholarshipName,
-    //       amount: application.applicationFees,
-    //       paymentDate: new Date(),
-    //       status: "success",
-    //     });
-    //   }
-
-    //   res.send({ success: true });
-    // });
-
-    // app.patch("/payment-success/:id", verifyFBToken, async (req, res) => {
-    //   const { id } = req.params;
-    //   const { transactionId } = req.body; // 👈 get from frontend
-
-    //   const application = await myApplicationsCollection.findOne({
-    //     _id: new ObjectId(id),
-    //   });
-
-    //   if (!application) {
-    //     return res.status(404).send({ message: "Application not found" });
-    //   }
-
-    //   if (application.userEmail !== req.decoded.email) {
-    //     return res.status(403).send({ message: "Forbidden access" });
-    //   }
-
-    //   if (application.paymentStatus === "paid") {
-    //     return res.send({ success: true });
-    //   }
-
-    //   // 1️⃣ Mark paid
-    //   await myApplicationsCollection.updateOne(
-    //     { _id: new ObjectId(id) },
-    //     { $set: { paymentStatus: "paid" } }
-    //   );
-
-    //   // 2️⃣ Save payment WITH transactionId
-    //   await paymentsCollection.insertOne({
-    //     applicationId: id,
-    //     userEmail: application.userEmail,
-    //     scholarshipName: application.scholarshipName,
-    //     universityName: application.universityName,
-    //     amount: application.applicationFees,
-    //     paymentDate: new Date(),
-
-    //     // ✅ THIS FIXES YOUR ISSUE
-    //     transactionId: transactionId || "N/A",
-
-    //     status: "success",
-    //   });
-
-    //   res.send({ success: true });
-    // });
     app.patch("/payment-success/:id", verifyFBToken, async (req, res) => {
       const { id } = req.params;
 
@@ -978,18 +794,24 @@ async function run() {
         return res.status(403).send({ message: "Forbidden access" });
       }
 
-      if (application.paymentStatus === "paid") {
-        return res.send({ success: true });
+      // 🔐 Check payment record FIRST
+      const existingPayment = await paymentsCollection.findOne({
+        applicationId: id,
+      });
+
+      if (existingPayment) {
+        return res.send({ success: true, message: "Payment already recorded" });
       }
 
-      // ✅ Generate transaction ID HERE
       const transactionId = `TXN-${Date.now()}-${id.slice(-6)}`;
 
+      // Mark application as paid
       await myApplicationsCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: { paymentStatus: "paid" } }
       );
 
+      // Insert payment ONCE
       await paymentsCollection.insertOne({
         applicationId: id,
         userEmail: application.userEmail,
@@ -999,10 +821,7 @@ async function run() {
         paymentDate: new Date(),
         paymentMethod: "stripe",
         currency: "usd",
-
-        // ✅ GUARANTEED VALUE
         transactionId,
-
         paymentStatus: "paid",
       });
 
@@ -1063,18 +882,7 @@ async function run() {
     });
 
     /* ================= PAYMENT HISTORY ================= */
-    // app.get("/payment-history", verifyFBToken, async (req, res) => {
-    //   if (req.query.email !== req.decoded.email) {
-    //     return res.status(403).send({ error: "Forbidden" });
-    //   }
 
-    //   res.send(
-    //     await paymentsCollection
-    //       .find({ userEmail: req.query.email })
-    //       .sort({ paymentDate: -1 })
-    //       .toArray()
-    //   );
-    // });
     app.get("/payment-history", verifyFBToken, async (req, res) => {
       if (req.query.email !== req.decoded.email) {
         return res.status(403).send({ message: "Forbidden" });
