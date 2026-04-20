@@ -19,16 +19,23 @@ admin.initializeApp({
 });
 
 /* ================= MIDDLEWARE ================= */
-const allowedOrigins = ["http://localhost:5173", "https://myfrontend.com"];
+
 
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://grant-genius.netlify.app"],
+    origin: [
+      "http://localhost:5173",
+      "https://grant-genius.netlify.app",
+      "https://grant-genius-client.vercel.app",
+    ],
     credentials: true,
   })
 );
 
 app.use(express.json());
+
+// Handle preflight OPTIONS requests explicitly
+app.options("*", cors());
 
 /* ================= FIREBASE TOKEN VERIFY ================= */
 const verifyFBToken = async (req, res, next) => {
