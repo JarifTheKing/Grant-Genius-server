@@ -20,22 +20,37 @@ admin.initializeApp({
 
 /* ================= MIDDLEWARE ================= */
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://grant-genius.netlify.app",
+  "https://grant-genius-client.vercel.app",
+];
 
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "https://grant-genius.netlify.app",
-      "https://grant-genius-client.vercel.app",
-    ],
-    credentials: true,
-  })
-);
+// Manual CORS middleware (reliable on Vercel)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization"
+  );
+
+  // Handle preflight
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  next();
+});
 
 app.use(express.json());
-
-// Handle preflight OPTIONS requests explicitly
-app.options("*", cors());
 
 /* ================= FIREBASE TOKEN VERIFY ================= */
 const verifyFBToken = async (req, res, next) => {
