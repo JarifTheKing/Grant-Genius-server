@@ -15,7 +15,7 @@ const decoded = Buffer.from(process.env.GRANT_SERVICE_KEY, "base64").toString(
 
 /* ================= FIREBASE ADMIN ================= */
 const admin = require("firebase-admin");
-const serviceAccount = require("./grant-genius-firebase-adminSDK.json");
+const serviceAccount = require("../grant-genius-firebase-adminSDK.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -921,6 +921,10 @@ app.get("/", (req, res) => {
   res.send("Jarif! Grant is Genius!");
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server running on port: ${port}`);
-});
+if (process.env.NODE_ENV !== "production") {
+  app.listen(port, () => {
+    console.log(`🚀 Server running on port: ${port}`);
+  });
+}
+
+module.exports = app;
