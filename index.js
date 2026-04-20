@@ -40,10 +40,6 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-app.get("/ping", (req, res) => {
-  res.send({ status: "ok", message: "pong_deployed" });
-});
-
 /* ================= FIREBASE TOKEN VERIFY ================= */
 const verifyFBToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
