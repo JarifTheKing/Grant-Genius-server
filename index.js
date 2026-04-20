@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -18,6 +19,17 @@ admin.initializeApp({
 });
 
 /* ================= MIDDLEWARE ================= */
+
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://grant-genius.netlify.app",
+      "https://grant-genius-client.vercel.app",
+    ],
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
